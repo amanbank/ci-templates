@@ -83,6 +83,8 @@ jobs:
       - name: SonarQube Quality Gate
         if: inputs.has-sonar
         uses: sonarsource/sonarqube-quality-gate-action@d304d050d930b02a896b0f85935344f023928496 # v1
+        with:
+          scanMetadataReportFile: build/sonar/report-task.txt
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
