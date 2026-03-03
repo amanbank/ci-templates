@@ -1,0 +1,66 @@
+name: Deploy
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: Service name (e.g. content-service)
+        type: string
+        required: true
+      image-name:
+        description: Full image name (e.g. ghcr.io/amanbank/content-service)
+        type: string
+        required: true
+      environment:
+        description: GitHub Environment name (test or production)
+        type: string
+        required: true
+      extra-env-flags:
+        description: Additional -e flags for docker run
+        type: string
+        default: ""
+    secrets:
+      DEPLOY_HOST:
+        required: true
+      DEPLOY_HOST_USER:
+        required: true
+      DEPLOY_HOST_PRIVATE_KEY:
+        required: true
+      SERVER_PORT:
+        required: true
+      CONFIG_SERVER_SSH_KEY:
+        required: false
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_HOST_USER }}
+          key: ${{ secrets.DEPLOY_HOST_PRIVATE_KEY }}
+          timeout: 300s
+          script: |
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            IMAGE="${{ inputs.image-name }}:${{ github.sha }}"
+            docker pull "$IMAGE"
+
+            docker stop ${{ inputs.service-name }} || true
+            docker rm -f ${{ inputs.service-name }} || true
+
+            docker run -d \
+              -e SPRING_PROFILES_ACTIVE=${{ inputs.environment }} \
+              -e CONFIG_SERVER_URL=http://config-server:8080 \
+              -e GITHUB_SSH_KEY='${{ secrets.CONFIG_SERVER_SSH_KEY }}' \
+              ${{ inputs.extra-env-flags }} \
+              --name ${{ inputs.service-name }} \
+              --restart unless-stopped \
+              --network platform_net \
+              -p ${{ secrets.SERVER_PORT }}:8080 \
+              "$IMAGE"

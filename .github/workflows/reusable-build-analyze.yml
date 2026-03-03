@@ -1,0 +1,152 @@
+name: Build and Analyze
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        description: JDK version
+        type: string
+        default: "25"
+      has-sonar:
+        description: Enable SonarQube analysis
+        type: boolean
+        default: false
+      has-dtrack:
+        description: Enable Dependency-Track SBOM upload
+        type: boolean
+        default: false
+    secrets:
+      SONAR_TOKEN:
+        required: false
+      SONAR_HOST_URL:
+        required: false
+      DTRACK_URL:
+        required: false
+      DTRACK_API_KEY:
+        required: false
+      DTRACK_PROJECT_UUID:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-analyze:
+    name: Build + Test + Analyze
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: zulu
+
+      - name: Cache SonarQube packages
+        if: inputs.has-sonar
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: |
+            ${{ runner.os }}-sonar
+
+      - name: Cache Gradle packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Build and analyze
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          TASKS="clean build"
+          if [ "${{ inputs.has-sonar }}" = "true" ]; then
+            TASKS="$TASKS sonar"
+          fi
+          if [ "${{ inputs.has-dtrack }}" = "true" ]; then
+            TASKS="$TASKS cyclonedxBom"
+          fi
+          ./gradlew $TASKS --no-daemon --info
+
+      - name: SonarQube Quality Gate
+        if: inputs.has-sonar
+        uses: sonarsource/sonarqube-quality-gate-action@d304d050d930b02a896b0f85935344f023928496 # v1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: Upload SBOM to Dependency-Track
+        if: inputs.has-dtrack
+        id: upload-sbom
+        run: |
+          RESPONSE=$(curl -sf -X POST "${{ secrets.DTRACK_URL }}/api/v1/bom" \
+            -H "X-Api-Key: ${{ secrets.DTRACK_API_KEY }}" \
+            -H "Content-Type: multipart/form-data" \
+            -F "project=${{ secrets.DTRACK_PROJECT_UUID }}" \
+            -F "autoCreate=true" \
+            -F "bom=@build/reports/cyclonedx/application.cdx.json")
+
+          TOKEN=$(echo "$RESPONSE" | jq -r '.token // empty')
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Dependency-Track analysis
+        if: inputs.has-dtrack && steps.upload-sbom.outputs.token != ''
+        run: |
+          TOKEN="${{ steps.upload-sbom.outputs.token }}"
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+
+          echo "Polling Dependency-Track for analysis completion (token: $TOKEN)..."
+
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            PROCESSING=$(curl -sf \
+              -H "X-Api-Key: ${{ secrets.DTRACK_API_KEY }}" \
+              "${{ secrets.DTRACK_URL }}/api/v1/bom/token/$TOKEN" \
+              | jq -r '.processing')
+
+            if [ "$PROCESSING" = "false" ]; then
+              echo "Analysis complete."
+              break
+            fi
+
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS — still processing..."
+            sleep 5
+          done
+
+          if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+            echo "::warning::Dependency-Track analysis timed out after $MAX_ATTEMPTS attempts"
+          fi
+
+      - name: Fail if CRITICAL vulnerabilities found
+        if: inputs.has-dtrack
+        run: |
+          CRITICAL=$(curl -sf \
+            -H "X-Api-Key: ${{ secrets.DTRACK_API_KEY }}" \
+            "${{ secrets.DTRACK_URL }}/api/v1/project/${{ secrets.DTRACK_PROJECT_UUID }}" \
+            | jq '.metrics.critical // 0')
+
+          echo "Critical vulnerabilities: $CRITICAL"
+
+          if [ "$CRITICAL" -gt 0 ]; then
+            echo "::error::$CRITICAL critical vulnerabilities found in dependencies"
+            exit 1
+          fi
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: app-jar
+          path: build/libs/*.jar

@@ -1,0 +1,43 @@
+name: ZAP API Scan
+
+on:
+  workflow_call:
+    inputs:
+      api-docs-path:
+        description: Path to OpenAPI docs endpoint
+        type: string
+        default: /v3/api-docs
+      fail-action:
+        description: Fail workflow on ZAP findings
+        type: boolean
+        default: false
+    secrets:
+      TARGET_HOST:
+        required: true
+      TARGET_PORT:
+        required: true
+
+jobs:
+  zap-scan:
+    name: OWASP ZAP API scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set target URL
+        id: target
+        run: echo "url=http://${{ secrets.TARGET_HOST }}:${{ secrets.TARGET_PORT }}${{ inputs.api-docs-path }}" >> "$GITHUB_OUTPUT"
+
+      - name: ZAP API scan
+        uses: zaproxy/action-api-scan@5158fe4d9d8fcc75ea204db81317cce7f9e5453d # v0.10.0
+        with:
+          target: ${{ steps.target.outputs.url }}
+          format: openapi
+          fail_action: ${{ inputs.fail-action }}
+          cmd_options: -I
+
+      - name: Upload ZAP report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zap-report
+          path: report_html.html
