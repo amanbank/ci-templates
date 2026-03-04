@@ -23,6 +23,7 @@ jobs:
 
     permissions:
       contents: read
+      issues: write
 
     steps:
       - name: Set target URL
@@ -35,7 +36,6 @@ jobs:
           target: ${{ steps.target.outputs.url }}
           format: openapi
           fail_action: ${{ inputs.fail-action }}
-          create_issue: false
           cmd_options: -I
 
       - name: Print ZAP report to logs
