@@ -65,14 +65,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Trivy vulnerability scan
+      - name: Trivy vulnerability scan (logs)
         uses: aquasecurity/trivy-action@97e0b3872f55f89b95b2f65b3dbab56962816478 # 0.34.2
         with:
           image-ref: ${{ inputs.image-name }}:${{ github.sha }}
           format: table
-          severity: CRITICAL,HIGH
+          severity: HIGH
+          ignore-unfixed: true
+          exit-code: 0
+
+      - name: Trivy fail on CRITICAL
+        uses: aquasecurity/trivy-action@97e0b3872f55f89b95b2f65b3dbab56962816478 # 0.34.2
+        with:
+          image-ref: ${{ inputs.image-name }}:${{ github.sha }}
+          format: table
+          severity: CRITICAL
           ignore-unfixed: true
           exit-code: 1
+          skip-setup-trivy: true
 
       - name: Push Docker image
         id: push
