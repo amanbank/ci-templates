@@ -1,5 +1,4 @@
 name: ZAP API Scan
-
 on:
   workflow_call:
     inputs:
@@ -22,6 +21,9 @@ jobs:
     name: OWASP ZAP API scan
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+
     steps:
       - name: Set target URL
         id: target
@@ -33,7 +35,15 @@ jobs:
           target: ${{ steps.target.outputs.url }}
           format: openapi
           fail_action: ${{ inputs.fail-action }}
+          create_issue: false
           cmd_options: -I
+
+      - name: Print ZAP report to logs
+        if: always()
+        run: |
+          echo "========== ZAP SCAN RESULTS =========="
+          cat report_md.md || cat report_html.html || echo "No report found"
+          echo "======================================"
 
       - name: Upload ZAP report
         if: always()
